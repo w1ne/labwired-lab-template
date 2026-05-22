@@ -1,0 +1,96 @@
+name: LabWired Simulator Gate
+
+# Runs the LabWired deterministic firmware simulator against this lab's
+# firmware ELF on every push and PR. The "killer feature" of the lab
+# template — same firmware that flashes to your hardware runs in CI
+# inside the simulator, gating the merge on whether the panel actually
+# drew. No board on the CI runner required.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  simulator-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo install (labwired-cli)
+        id: cargo-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/labwired
+            ~/.cargo/registry/
+            ~/.cargo/git/
+          # Bump this revision pin (or use a tag) to update labwired-cli.
+          key: ${{ runner.os }}-labwired-cli-ba14bd1
+
+      - name: Install labwired-cli
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/w1ne/labwired-core --bin labwired --rev ba14bd1
+
+      - name: Resolve firmware ELF
+        run: |
+          # Default lab: AgentDeck reference firmware from the
+          # firmware-demos-v1 release. Replace this step with your own
+          # firmware build (arduino-cli compile, cargo build for Rust
+          # no_std, espflash compile, etc.) and point FIRMWARE_ELF at
+          # the artifact you want gated.
+          mkdir -p artifacts
+          curl -fsSL \
+            https://github.com/w1ne/labwired-core/releases/download/firmware-demos-v1/demo-agentdeck.elf \
+            -o artifacts/firmware.elf
+          ls -lh artifacts/firmware.elf
+
+      - name: Run LabWired simulator gate
+        env:
+          # Match these to your firmware. `agentdeck` profile = AgentDeck's
+          # hand-curated bootstrap; `arduino-esp32` = any Arduino-ESP32
+          # ELF that kept its symbol table.
+          PROFILE: agentdeck
+          # Cycles to run before snapshot. 35M = enough for AgentDeck's
+          # first SSD1680 refresh on a 240 MHz Xtensa-LX6 target.
+          STEPS: '35000000'
+          # Minimum non-FF bytes on the black plane to call the lab
+          # "drew something." Anything below this is treated as an
+          # empty / corrupted refresh.
+          MIN_BLACK_NON_FF: '50'
+        run: |
+          set -e
+          labwired snapshot capture \
+            --firmware artifacts/firmware.elf \
+            --steps "$STEPS" \
+            --output artifacts/post-paint.lwrs \
+            --profile "$PROFILE" \
+            --progress-every 5000000 \
+            2>&1 | tee artifacts/simgate.log
+
+          gen=$(grep -oE "refresh_generation=[0-9]+" artifacts/simgate.log | head -1 | grep -oE "[0-9]+$" || echo 0)
+          non_ff=$(grep -oE "black-plane non-FF bytes=[0-9]+" artifacts/simgate.log | head -1 | grep -oE "[0-9]+$" || echo 0)
+
+          echo "::notice::refresh_generation=$gen non_ff=$non_ff"
+          if [ "$gen" -lt 1 ]; then
+            echo "::error::Panel never refreshed in $STEPS cycles — firmware regressed."
+            exit 1
+          fi
+          if [ "$non_ff" -lt "$MIN_BLACK_NON_FF" ]; then
+            echo "::error::Panel only drew $non_ff non-FF bytes (< $MIN_BLACK_NON_FF). Looks empty."
+            exit 1
+          fi
+          echo "::notice title=LabWired Sim Gate::PASS — panel drew $non_ff non-FF bytes."
+
+      - name: Upload simulator artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: labwired-sim-output
+          path: artifacts/
+          if-no-files-found: warn

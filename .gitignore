@@ -1,0 +1,6 @@
+artifacts/
+target/
+*.elf
+*.bin
+*.lwrs
+.DS_Store
