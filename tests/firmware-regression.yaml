@@ -1,0 +1,9 @@
+schema_version: "1.0"
+inputs:
+  firmware: "../firmware/demo.elf"
+  system: "../firmware/system.yaml"
+limits:
+  max_steps: 20000
+assertions:
+  - uart_contains: "Hello from LabWired C Example!"
+  - expected_stop_reason: max_steps

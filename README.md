@@ -1,48 +1,55 @@
 # LabWired Lab
 
-A starter repo that runs the [LabWired](https://github.com/w1ne/labwired-core)
-deterministic firmware simulator against your firmware on every push, gating
-the merge on whether your panel/LED/peripheral actually behaved.
+A small firmware repository with a working simulation test. It includes firmware
+source, a prebuilt ELF, a board manifest, and two behavior assertions. A second
+test deliberately expects the wrong UART text so CI also checks that the gate
+can fail.
 
-## What the CI does
+## Run locally
 
-`.github/workflows/labwired-ci.yml`:
+Install the released CLI, then run the same tests as CI:
 
-1. Installs `labwired-cli` from source (cached between runs).
-2. Pulls a firmware ELF (defaults to the AgentDeck reference; replace with
-   your own build step).
-3. Boots the firmware in the LabWired Xtensa-LX6 simulator for N cycles.
-4. Captures the final peripheral state and asserts:
-   - The SSD1680 panel actually refreshed (`refresh_generation ≥ 1`).
-   - It drew enough content to not be an empty screen (`MIN_BLACK_NON_FF`).
-5. Uploads the simulator log + LWRS snapshot as a CI artifact, so you can
-   download and inspect what your firmware drew without having a board.
-
-## Local sim — same simulator that gates the merge
-
-```bash
-cargo install --git https://github.com/w1ne/labwired-core --bin labwired
-labwired snapshot capture \
-  --firmware path/to/firmware.elf \
-  --steps 35000000 \
-  --output post-paint.lwrs \
-  --profile agentdeck
+```sh
+curl -fsSL https://labwired.com/install.sh | LABWIRED_VERSION=v0.25.0 sh
+python3 scripts/check-gate.py
 ```
 
-## Customize for your lab
+The positive test must pass both assertions and return exit code 0. The negative
+control must fail its UART assertion and return exit code 1. Results, UART logs,
+and JUnit XML are written under `out/positive` and `out/negative`.
 
-The workflow file is the single source of truth. Edit it to:
+No firmware compiler is needed to run the committed ELF. Python 3 and the
+`labwired` executable must be on `PATH`; set `LABWIRED_CLI` to use another binary.
 
-- Replace the firmware download step with your own build (`arduino-cli compile`,
-  `cargo build` for Rust no_std, `idf.py build`, etc.).
-- Swap `PROFILE: agentdeck` for `arduino-esp32` if your sketch ships with
-  symbols (any `arduino-cli compile` output does).
-- Tune `STEPS` and `MIN_BLACK_NON_FF` to your firmware's behavior.
-- Add behavior assertions beyond the panel — UART output, GPIO transitions,
-  CPU register state are all on the `labwired test --script` path.
+## What is simulated
 
-## What's special
+`firmware/demo.elf` is the program in `firmware/src/main.c`. It sends a greeting
+through a generic memory-mapped UART and then loops. The manifest describes a
+generic ARM Cortex-M target. This fixture checks the simulation and CI path;
+it does not establish timing or peripheral compatibility with a specific board.
 
-Same firmware ELF that flashes to your physical board runs in CI. No mocks,
-no fakes — a cycle-accurate Xtensa simulator stepping the actual ELF.
-That's the deal.
+To rebuild the ELF, install `arm-none-eabi-gcc` and run `make -C firmware`.
+Commit the rebuilt ELF when the source changes, or add the build to your workflow.
+
+## Use your firmware
+
+1. Replace `firmware/demo.elf` with your compiled ELF.
+2. Update `firmware/system.yaml` and its chip descriptor for your hardware.
+3. Update `tests/firmware-regression.yaml` with the behavior you expect.
+4. Run `python3 scripts/check-gate.py`. Keep at least one `uart_contains`
+   assertion so the negative control can confirm a failed assertion is rejected.
+
+The workflow runs on every branch, including the repository's `master` default.
+This repository uses a self-hosted Linux X64 runner. If you generate a copy and
+use GitHub-hosted runners, change `runs-on` to `ubuntu-latest`. Fork pull requests
+are not executed on this repository's self-hosted runners.
+
+## Make the test a required merge check
+
+Run the workflow once. In the rule for your default branch, enable
+**Require status checks to pass before merging** and select `simulator-gate`.
+Copying a template or adding a workflow does not create that rule automatically.
+
+For richer hardware examples, use the current
+[LabWired examples](https://github.com/w1ne/labwired-core/tree/main/examples).
+Each example defines its own firmware, manifest, and supported behavior.

@@ -1,6 +1,9 @@
 artifacts/
+out/
 target/
 *.elf
+!firmware/demo.elf
+firmware/src/*.o
 *.bin
 *.lwrs
 .DS_Store
