@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -14,6 +15,8 @@ SCRIPT = ROOT / "tests/firmware-regression.yaml"
 
 def run(script, case, expected_code):
     out = ROOT / "out" / case
+    # A failed invocation must not reuse an earlier verdict on a persistent runner.
+    shutil.rmtree(out, ignore_errors=True)
     completed = subprocess.run([
         os.environ.get("LABWIRED_CLI", "labwired"), "test", "--script", str(script),
         "--output-dir", str(out), "--no-uart-stdout",
